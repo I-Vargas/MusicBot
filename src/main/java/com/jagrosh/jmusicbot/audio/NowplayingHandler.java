@@ -15,6 +15,7 @@
  */
 package com.jagrosh.jmusicbot.audio;
 
+import com.jagrosh.jlyrics.LyricsClient;
 import com.jagrosh.jmusicbot.Bot;
 import com.jagrosh.jmusicbot.entities.Pair;
 import com.jagrosh.jmusicbot.settings.Settings;
@@ -23,6 +24,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+
+import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Activity;
 import net.dv8tion.jda.api.entities.Guild;
@@ -39,19 +42,22 @@ public class NowplayingHandler
 {
     private final Bot bot;
     private final HashMap<Long,Pair<Long,Long>> lastNP; // guild -> channel,message
-    
+    private final HashMap<Long,Pair<Long,Long>> lastLyrics; // guild -> channel,message
+    private final LyricsClient lyricsClient = new LyricsClient();
+
     public NowplayingHandler(Bot bot)
     {
         this.bot = bot;
         this.lastNP = new HashMap<>();
+        this.lastLyrics = new HashMap<>();
     }
     
     public void init()
     {
         if(!bot.getConfig().useNPImages())
-            bot.getThreadpool().scheduleWithFixedDelay(() -> updateAll(), 0, 5, TimeUnit.SECONDS);
+            bot.getThreadpool().scheduleWithFixedDelay(() -> updateNP(), 0, 1, TimeUnit.SECONDS);
     }
-    
+
     public void setLastNPMessage(Message m)
     {
         lastNP.put(m.getGuild().getIdLong(), new Pair<>(m.getTextChannel().getIdLong(), m.getIdLong()));
@@ -62,7 +68,7 @@ public class NowplayingHandler
         lastNP.remove(guild.getIdLong());
     }
     
-    private void updateAll()
+    private void updateNP()
     {
         Set<Long> toRemove = new HashSet<>();
         for(long guildId: lastNP.keySet())
@@ -97,6 +103,46 @@ public class NowplayingHandler
             }
         }
         toRemove.forEach(id -> lastNP.remove(id));
+    }
+
+    private void updateLyrics(String title) {
+        Set<Long> toRemove = new HashSet<>();
+        for (long guildId : lastLyrics.keySet()) {
+            Guild guild = bot.getJDA().getGuildById(guildId);
+            if (guild == null) {
+                toRemove.add(guildId);
+                continue;
+            }
+            Pair<Long, Long> pair = lastLyrics.get(guildId);
+            TextChannel tc = guild.getTextChannelById(pair.getKey());
+            if (tc == null) {
+                toRemove.add(guildId);
+                continue;
+            }
+
+            lyricsClient.getLyrics(title).thenAccept(lyrics ->
+            {
+                EmbedBuilder eb = new EmbedBuilder()
+                        .setAuthor(lyrics.getAuthor())
+                        .setTitle(lyrics.getTitle(), lyrics.getURL());
+
+                if (lyrics.getContent().trim().length() > 15000) {
+                    eb.setDescription("Lyrics found but likely incorrect: " + lyrics.getURL());
+                } else if (lyrics.getContent().trim().length() > 2000) {
+                    eb.setDescription(lyrics.getContent().trim().substring(0, 2000));
+                } else {
+                    eb.setDescription(lyrics.getContent().trim());
+                }
+
+                try {
+                    tc.editMessageEmbedsById(pair.getValue(), eb.build()).queue(m -> {
+                    }, t -> lastNP.remove(guildId));
+                } catch (Exception e) {
+                    toRemove.add(guildId);
+                }
+            });
+        }
+        toRemove.forEach(id -> lastLyrics.remove(id));
     }
     
     public void updateTopic(long guildId, AudioHandler handler, boolean wait)
@@ -146,6 +192,25 @@ public class NowplayingHandler
         
         // update channel topic if applicable
         updateTopic(guildId, handler, false);
+
+        // update lyrics
+        if (bot.getConfig().useNPLyrics())
+            updateLyrics(sanitizeTitle(track.getInfo().title));
+    }
+
+    private String sanitizeTitle(String title)
+    {
+        return title.trim().toLowerCase()
+                .replaceAll("official", "")
+                .replaceAll("lyrics", "")
+                .replaceAll("video", "")
+                .replaceAll("uhd", "")
+                .replaceAll("hd", "")
+                .replaceAll(" {2}", " ")
+                .replaceAll("\\( \\)", "")
+                .replaceAll("\\[ ]", "")
+                .replaceAll("\\(\\)", "")
+                .replaceAll("\\[]", "");
     }
     
     public void onMessageDelete(Guild guild, long messageId)
