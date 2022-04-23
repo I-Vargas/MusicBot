@@ -24,7 +24,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.Activity;
@@ -51,23 +50,28 @@ public class NowplayingHandler
         this.lastNP = new HashMap<>();
         this.lastLyrics = new HashMap<>();
     }
-    
+
     public void init()
     {
         if(!bot.getConfig().useNPImages())
-            bot.getThreadpool().scheduleWithFixedDelay(() -> updateNP(), 0, 1, TimeUnit.SECONDS);
+            bot.getThreadpool().scheduleWithFixedDelay(() -> updateNP(), 0, 5, TimeUnit.SECONDS);
     }
 
     public void setLastNPMessage(Message m)
     {
         lastNP.put(m.getGuild().getIdLong(), new Pair<>(m.getTextChannel().getIdLong(), m.getIdLong()));
     }
-    
+    public void setLastNPLyricsMessage(Message m)
+    {
+        lastLyrics.put(m.getGuild().getIdLong(), new Pair<>(m.getTextChannel().getIdLong(), m.getIdLong()));
+    }
+
     public void clearLastNPMessage(Guild guild)
     {
         lastNP.remove(guild.getIdLong());
+        lastLyrics.remove(guild.getIdLong());
     }
-    
+
     private void updateNP()
     {
         Set<Long> toRemove = new HashSet<>();
@@ -93,11 +97,11 @@ public class NowplayingHandler
                 msg = handler.getNoMusicPlaying(bot.getJDA());
                 toRemove.add(guildId);
             }
-            try 
+            try
             {
                 tc.editMessageById(pair.getValue(), msg).queue(m->{}, t -> lastNP.remove(guildId));
-            } 
-            catch(Exception e) 
+            }
+            catch(Exception e)
             {
                 toRemove.add(guildId);
             }
@@ -133,10 +137,8 @@ public class NowplayingHandler
                 } else {
                     eb.setDescription(lyrics.getContent().trim());
                 }
-
                 try {
-                    tc.editMessageEmbedsById(pair.getValue(), eb.build()).queue(m -> {
-                    }, t -> lastNP.remove(guildId));
+                    tc.editMessageEmbedsById(pair.getValue(), eb.build()).queue(m -> {}, t -> lastLyrics.remove(guildId));
                 } catch (Exception e) {
                     toRemove.add(guildId);
                 }
@@ -144,7 +146,7 @@ public class NowplayingHandler
         }
         toRemove.forEach(id -> lastLyrics.remove(id));
     }
-    
+
     public void updateTopic(long guildId, AudioHandler handler, boolean wait)
     {
         Guild guild = bot.getJDA().getGuildById(guildId);
@@ -165,19 +167,19 @@ public class NowplayingHandler
             String text = handler.getTopicFormat(bot.getJDA()) + otherText;
             if(!text.equals(tchan.getTopic()))
             {
-                try 
+                try
                 {
                     // normally here if 'wait' was false, we'd want to queue, however,
                     // new discord ratelimits specifically limiting changing channel topics
                     // mean we don't want a backlog of changes piling up, so if we hit a 
                     // ratelimit, we just won't change the topic this time
                     tchan.getManager().setTopic(text).complete(wait);
-                } 
+                }
                 catch(PermissionException | RateLimitedException ignore) {}
             }
         }
     }
-    
+
     // "event"-based methods
     public void onTrackUpdate(long guildId, AudioTrack track, AudioHandler handler)
     {
@@ -189,13 +191,14 @@ public class NowplayingHandler
             else
                 bot.resetGame();
         }
-        
+
         // update channel topic if applicable
         updateTopic(guildId, handler, false);
 
         // update lyrics
-        if (bot.getConfig().useNPLyrics())
+        if (track != null && bot.getConfig().useNPLyrics()) {
             updateLyrics(sanitizeTitle(track.getInfo().title));
+        }
     }
 
     private String sanitizeTitle(String title)
@@ -203,7 +206,9 @@ public class NowplayingHandler
         return title.trim().toLowerCase()
                 .replaceAll("official", "")
                 .replaceAll("lyrics", "")
+                .replaceAll("music", "")
                 .replaceAll("video", "")
+                .replaceAll("4k", "")
                 .replaceAll("uhd", "")
                 .replaceAll("hd", "")
                 .replaceAll(" {2}", " ")
@@ -212,13 +217,15 @@ public class NowplayingHandler
                 .replaceAll("\\(\\)", "")
                 .replaceAll("\\[]", "");
     }
-    
+
     public void onMessageDelete(Guild guild, long messageId)
     {
         Pair<Long,Long> pair = lastNP.get(guild.getIdLong());
-        if(pair==null)
-            return;
-        if(pair.getValue() == messageId)
+        if(pair != null && pair.getValue() == messageId)
             lastNP.remove(guild.getIdLong());
+
+        Pair<Long,Long> pair2 = lastLyrics.get(guild.getIdLong());
+        if(pair2 != null && pair2.getValue() == messageId)
+            lastLyrics.remove(guild.getIdLong());
     }
 }

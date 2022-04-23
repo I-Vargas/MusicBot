@@ -51,5 +51,9 @@ public class NowplayingCmd extends MusicCommand
         {
             event.reply(m, msg -> bot.getNowplayingHandler().setLastNPMessage(msg));
         }
+
+        Message m2 = handler.getNowPlaying(event.getJDA());
+        if(m2 != null)
+            event.reply(m, msg -> bot.getNowplayingHandler().setLastNPLyricsMessage(msg));
     }
 }
